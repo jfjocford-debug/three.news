@@ -1,0 +1,87 @@
+name: Run Three Drop
+
+# Runs the Three pipeline 3x/day (Morning, Afternoon, Late Night) on
+# GitHub's own runners — no separate hosting needed, and no timeout
+# constraints like a serverless function would have.
+#
+# DST handling: GitHub Actions cron is fixed UTC and does not shift
+# with daylight saving, but Central Time does (CST = UTC-6, CDT =
+# UTC-5). So each drop has TWO cron entries below — one for each
+# offset — and the "Determine which drop this is" step checks the
+# actual Chicago wall-clock hour to figure out which drop (if any)
+# this firing corresponds to. The non-matching firing of each pair
+# exits harmlessly without running the pipeline. This means the
+# schedule below never needs manual editing across DST changes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      drop:
+        description: "Force a specific drop (skips time-of-day detection)"
+        required: false
+        type: choice
+        options:
+          - morning
+          - afternoon
+          - latenight
+  schedule:
+    - cron: "0 13 * * *" # 7:00 AM CST -> 13:00 UTC
+    - cron: "0 12 * * *" # 7:00 AM CDT -> 12:00 UTC
+    - cron: "0 19 * * *" # 1:00 PM CST -> 19:00 UTC
+    - cron: "0 18 * * *" # 1:00 PM CDT -> 18:00 UTC
+    - cron: "0 3 * * *" # 9:00 PM CST -> 03:00 UTC (next day)
+    - cron: "0 2 * * *" # 9:00 PM CDT -> 02:00 UTC (next day)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: three-drop-run
+  cancel-in-progress: false
+
+jobs:
+  run-drop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Determine which drop this is
+        id: determine
+        run: |
+          if [ -n "${{ github.event.inputs.drop }}" ]; then
+            echo "Manual dispatch — forcing drop: ${{ github.event.inputs.drop }}"
+            echo "drop=${{ github.event.inputs.drop }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          HOUR=$(TZ="America/Chicago" date +%H)
+          echo "Current Chicago hour: $HOUR"
+
+          case "$HOUR" in
+            07) echo "drop=morning" >> "$GITHUB_OUTPUT" ;;
+            13) echo "drop=afternoon" >> "$GITHUB_OUTPUT" ;;
+            21) echo "drop=latenight" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "Hour $HOUR doesn't match a drop time — this is the redundant DST-safety firing, skipping."
+              echo "drop=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Run the drop
+        if: steps.determine.outputs.drop != ''
+        env:
+          FRAMER_API_KEY: ${{ secrets.FRAMER_API_KEY }}
+          FRAMER_PROJECT_URL: ${{ secrets.FRAMER_PROJECT_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CURRENTS_API_KEY: ${{ secrets.CURRENTS_API_KEY }}
+        run: npx tsx src/run-drop.ts ${{ steps.determine.outputs.drop }}
