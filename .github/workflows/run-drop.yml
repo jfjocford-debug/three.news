@@ -25,12 +25,12 @@ on:
           - afternoon
           - latenight
   schedule:
-    - cron: "0 13 * * *" # 7:00 AM CST -> 13:00 UTC
-    - cron: "0 12 * * *" # 7:00 AM CDT -> 12:00 UTC
-    - cron: "0 19 * * *" # 1:00 PM CST -> 19:00 UTC
-    - cron: "0 18 * * *" # 1:00 PM CDT -> 18:00 UTC
-    - cron: "0 3 * * *" # 9:00 PM CST -> 03:00 UTC (next day)
-    - cron: "0 2 * * *" # 9:00 PM CDT -> 02:00 UTC (next day)
+    - cron: "7 13 * * *" # 7:07 AM CST -> 13:07 UTC
+    - cron: "7 12 * * *" # 7:07 AM CDT -> 12:07 UTC
+    - cron: "7 19 * * *" # 1:07 PM CST -> 19:07 UTC
+    - cron: "7 18 * * *" # 1:07 PM CDT -> 18:07 UTC
+    - cron: "7 3 * * *"  # 9:07 PM CST -> 03:07 UTC (next day)
+    - cron: "7 2 * * *"  # 9:07 PM CDT -> 02:07 UTC (next day)
 
 permissions:
   contents: read
