@@ -15,6 +15,17 @@
  *      and write a rationale grounded in what the piece actually is —
  *      not the abstract proposal.
  *
+ * MATCH QUALITY: step 3 requires a genuine, defensible connection
+ * (subject, composition, or well-documented symbolism) — not just "same
+ * rough era or mood." If nothing in a shortlist actually qualifies, the
+ * model can reject the whole batch instead of being forced to force-fit
+ * the least-bad option; findArtwork then retries once with a fresh set
+ * of search queries before giving up. This replaced an earlier version
+ * that always required a pick even from a weak shortlist, which is how
+ * mismatches like a 19th-century engraving illustrating a same-day mail
+ * ballot story got through — the model had no way to say "none of these
+ * actually connect," so it always found *something* to justify.
+ *
  * Uses /v1.1 of the Met's API — /v1/search is deprecated and retires
  * October 1, 2026.
  */
@@ -66,9 +77,18 @@ interface MetObjectDetail {
 
 /**
  * Turns Draft's prose concept into a handful of real, short search
- * queries the Met's API can actually use.
+ * queries the Met's API can actually use. `avoidQueries` lets a retry
+ * steer away from phrasing that already produced a rejected shortlist.
  */
-async function generateSearchQueries(proposal: ArtworkProposal): Promise<string[]> {
+async function generateSearchQueries(
+    proposal: ArtworkProposal,
+    avoidQueries: string[] = []
+): Promise<string[]> {
+    const avoidNote =
+        avoidQueries.length > 0
+            ? `\n\nThese queries were already tried and did not produce anything with a genuine connection to the concept — try meaningfully different angles this time, not close variants:\n${avoidQueries.map((q) => `- "${q}"`).join("\n")}`
+            : ""
+
     const prompt = `You are generating search queries for the Metropolitan Museum of Art's Open Access API, based on an artwork concept.
 
 Era: ${proposal.era}
@@ -77,7 +97,7 @@ Rationale: ${proposal.rationale}
 
 The Met's search is a literal keyword/catalog search, not a semantic or visual search — it matches against actual titles, subjects, and cataloging terms, not poetic descriptions. Abstract phrases like "threshold light composition" or "turning back glance" will not match real museum catalog entries.
 
-Generate 4 short, CONCRETE search queries (2-3 words each) using the kind of literal, plain terms that actually appear in art catalogs: concrete subjects (a person's action, a common mythological or biblical scene, an object type), not moods or compositions. Think "woman reading letter," "man at window," "departure scene," "farewell painting" — not abstract interpretive phrases. Vary the angle across the 4 queries.
+Generate 4 short, CONCRETE search queries (2-3 words each) using the kind of literal, plain terms that actually appear in art catalogs: concrete subjects (a person's action, a common mythological or biblical scene, an object type), not moods or compositions. Think "woman reading letter," "man at window," "departure scene," "farewell painting" — not abstract interpretive phrases. Vary the angle across the 4 queries.${avoidNote}
 
 Respond with ONLY a JSON array of 4 strings, no other text:
 ["query one", "query two", "query three", "query four"]`
@@ -134,6 +154,7 @@ const MAX_QUERIES_TO_TRY = 4
 const MAX_OBJECT_IDS_PER_QUERY = 15
 const MAX_DETAIL_FETCHES = 40
 const MAX_CANDIDATES_FOR_FINAL_SELECTION = 10
+const MAX_SELECTION_ATTEMPTS = 2
 
 /**
  * Runs the full search -> filter -> fetch pipeline, returning a
@@ -181,14 +202,21 @@ async function findCandidates(queries: string[]): Promise<MetObjectDetail[]> {
     return candidates
 }
 
+type SelectionResult =
+    | { matched: true; artwork: SelectedArtwork }
+    | { matched: false; reason: string }
+
 /**
- * Given a real shortlist, asks Claude to pick the single best match
- * and write a rationale grounded in what the piece actually is.
+ * Given a real shortlist, asks Claude to pick the single best match — or
+ * reject the whole shortlist if nothing genuinely connects. Rejection is
+ * a real, expected outcome here, not an error: keyword search can return
+ * pieces that share an era or mood without meaning anything relevant to
+ * the actual story.
  */
 async function selectBestMatch(
     proposal: ArtworkProposal,
     candidates: MetObjectDetail[]
-): Promise<SelectedArtwork> {
+): Promise<SelectionResult> {
     const candidateList = candidates
         .map(
             (c, i) =>
@@ -207,12 +235,20 @@ Here are REAL candidate pieces from the Met's collection, all confirmed public d
 ${candidateList}
 ---
 
-Pick the single best match. It doesn't need to be a perfect literal match — pick whichever real piece best captures the spirit of the concept. Write a NEW rationale grounded in what this actual piece is (its real title, artist, subject, composition) — not a restatement of the abstract proposal.
+Pick the single best match — but ONLY if it has a genuine, defensible connection to the concept: a real match in subject, composition, or well-documented symbolism. Sharing just an era or a loose "mood" is NOT enough on its own. If nothing on this list actually connects, say so — do not force a pick just because the list requires one. A rejected batch leads to a fresh search, which is a normal, expected outcome, not a failure.
 
-Respond with ONLY a JSON object, no other text:
+If you pick one, write a NEW rationale grounded in what this actual piece is (its real title, artist, subject, composition) — not a restatement of the abstract proposal.
+
+Respond with ONLY a JSON object, no other text. Either:
 {
+  "matched": true,
   "objectID": 12345,
   "finalRationale": "..."
+}
+or:
+{
+  "matched": false,
+  "reason": "..."
 }`
 
     const response = await anthropic.messages.create({
@@ -227,11 +263,15 @@ Respond with ONLY a JSON object, no other text:
         throw new Error("Final artwork selection returned no text content")
     }
 
-    let result: { objectID: number; finalRationale: string }
+    let result: { matched: boolean; objectID?: number; finalRationale?: string; reason?: string }
     try {
         result = extractJSON(textBlock.text)
     } catch (err) {
         throw new Error(`Failed to parse final selection as JSON. Raw:\n${textBlock.text}`)
+    }
+
+    if (!result.matched) {
+        return { matched: false, reason: result.reason || "No candidate had a genuine connection to the concept." }
     }
 
     const chosen = candidates.find((c) => c.objectID === result.objectID)
@@ -242,28 +282,46 @@ Respond with ONLY a JSON object, no other text:
     }
 
     return {
-        title: chosen.title,
-        artist: chosen.artistDisplayName || "Artist unknown",
-        date: chosen.objectDate,
-        objectURL: chosen.objectURL,
-        imageURL: chosen.primaryImage,
-        creditLine: `${chosen.title} — ${chosen.artistDisplayName || "Artist unknown"}, ${chosen.objectDate}`,
-        finalRationale: result.finalRationale,
+        matched: true,
+        artwork: {
+            title: chosen.title,
+            artist: chosen.artistDisplayName || "Artist unknown",
+            date: chosen.objectDate,
+            objectURL: chosen.objectURL,
+            imageURL: chosen.primaryImage,
+            creditLine: `${chosen.title} — ${chosen.artistDisplayName || "Artist unknown"}, ${chosen.objectDate}`,
+            finalRationale: result.finalRationale || "",
+        },
     }
 }
 
 export async function findArtwork(proposal: ArtworkProposal): Promise<SelectedArtwork> {
-    const queries = await generateSearchQueries(proposal)
-    const candidates = await findCandidates(queries)
+    const triedQueries: string[] = []
 
-    if (candidates.length === 0) {
-        throw new Error(
-            `No public-domain, image-having candidates found for era "${proposal.era}" with queries: ${queries.join(", ")}. ` +
-                `Try again — the Met's collection is large but keyword search can miss on a given attempt.`
-        )
+    for (let attempt = 1; attempt <= MAX_SELECTION_ATTEMPTS; attempt++) {
+        const queries = await generateSearchQueries(proposal, triedQueries)
+        triedQueries.push(...queries)
+
+        const candidates = await findCandidates(queries)
+
+        if (candidates.length === 0) {
+            console.log(`   Attempt ${attempt}: no candidates found at all, ${attempt < MAX_SELECTION_ATTEMPTS ? "retrying with fresh queries..." : "out of attempts."}`)
+            continue
+        }
+
+        const result = await selectBestMatch(proposal, candidates)
+
+        if (result.matched) {
+            return result.artwork
+        }
+
+        console.log(`   Attempt ${attempt}: shortlist rejected — ${result.reason}${attempt < MAX_SELECTION_ATTEMPTS ? " Retrying with fresh queries..." : " Out of attempts."}`)
     }
 
-    return selectBestMatch(proposal, candidates)
+    throw new Error(
+        `No genuinely-connected, public-domain candidate found for era "${proposal.era}" after ${MAX_SELECTION_ATTEMPTS} attempts. ` +
+            `Queries tried: ${triedQueries.join(", ")}.`
+    )
 }
 
 // Manual test runner. Run with: npx tsx src/artwork.ts
