@@ -26,6 +26,19 @@
  * ballot story got through — the model had no way to say "none of these
  * actually connect," so it always found *something* to justify.
  *
+ * MEDIUM PREFERENCE (this revision): real published output showed a
+ * strong bias toward non-painting objects — medals, porcelain services,
+ * bronze statuettes, architectural prints, photographs — because nothing
+ * in the pipeline ever mentioned medium at all. The Met's `medium` field
+ * was fetched and shown to the selecting model, but with no instruction
+ * to weigh it, keyword search just returned whatever the Met had across
+ * every object type, and selection picked on subject-match alone. Both
+ * the query generation and final selection steps now explicitly prefer
+ * paintings — with one deliberate exception: actual Greek panel painting
+ * barely survives anywhere, so for the Classical Greek era specifically,
+ * vase painting counts as the real painting-equivalent rather than being
+ * penalized as "not a painting."
+ *
  * Uses /v1.1 of the Met's API — /v1/search is deprecated and retires
  * October 1, 2026.
  */
@@ -89,6 +102,14 @@ async function generateSearchQueries(
             ? `\n\nThese queries were already tried and did not produce anything with a genuine connection to the concept — try meaningfully different angles this time, not close variants:\n${avoidQueries.map((q) => `- "${q}"`).join("\n")}`
             : ""
 
+    // Nudges query phrasing toward the medium we actually want back,
+    // since the Met's keyword search has no separate medium filter —
+    // the words in the query itself are the only lever available here.
+    const mediumNote =
+        proposal.era === "Classical Greek"
+            ? `\n\nMEDIUM: prefer terms associated with Greek vase painting (e.g. "red-figure vase," "black-figure amphora," "painted krater") over sculpture or pottery-shape terms alone — actual Greek panel painting barely survives, so vase painting is the real painting-equivalent for this era, not a fallback.`
+            : `\n\nMEDIUM: at least half of the 4 queries should include a word like "painting" or "portrait" to bias results toward actual paintings. Avoid phrasing that mainly surfaces decorative objects, medals, ceramics, or sculpture (e.g. prefer "farewell painting" over just "farewell scene").`
+
     const prompt = `You are generating search queries for the Metropolitan Museum of Art's Open Access API, based on an artwork concept.
 
 Era: ${proposal.era}
@@ -97,7 +118,7 @@ Rationale: ${proposal.rationale}
 
 The Met's search is a literal keyword/catalog search, not a semantic or visual search — it matches against actual titles, subjects, and cataloging terms, not poetic descriptions. Abstract phrases like "threshold light composition" or "turning back glance" will not match real museum catalog entries.
 
-Generate 4 short, CONCRETE search queries (2-3 words each) using the kind of literal, plain terms that actually appear in art catalogs: concrete subjects (a person's action, a common mythological or biblical scene, an object type), not moods or compositions. Think "woman reading letter," "man at window," "departure scene," "farewell painting" — not abstract interpretive phrases. Vary the angle across the 4 queries.${avoidNote}
+Generate 4 short, CONCRETE search queries (2-3 words each) using the kind of literal, plain terms that actually appear in art catalogs: concrete subjects (a person's action, a common mythological or biblical scene, an object type), not moods or compositions. Think "woman reading letter," "man at window," "departure scene," "farewell painting" — not abstract interpretive phrases. Vary the angle across the 4 queries.${mediumNote}${avoidNote}
 
 Respond with ONLY a JSON array of 4 strings, no other text:
 ["query one", "query two", "query three", "query four"]`
@@ -224,6 +245,11 @@ async function selectBestMatch(
         )
         .join("\n\n")
 
+    const mediumGuidance =
+        proposal.era === "Classical Greek"
+            ? `MEDIUM PREFERENCE: for this era, treat Greek vase painting (red-figure, black-figure, painted pottery) as the real "painting" category — actual panel painting from this period doesn't survive in any collection, so vase painting is not a fallback, it's the correct choice. Prefer it over sculpture, coins, or unpainted pottery shapes when the subject match is comparable.`
+            : `MEDIUM PREFERENCE: prefer an actual painting (oil, tempera, fresco, panel, or a drawing/print if no painting connects as well) over sculpture, medals, ceramics, metalwork, or other decorative/utilitarian objects. Only choose a non-painting candidate if it connects to the concept meaningfully better than every painting option on the list — a mediocre painting match does not automatically beat a strong sculpture match, but a comparable one should win on medium.`
+
     const prompt = `You proposed this artwork concept for a story:
 
 Era: ${proposal.era}
@@ -236,6 +262,8 @@ ${candidateList}
 ---
 
 Pick the single best match — but ONLY if it has a genuine, defensible connection to the concept: a real match in subject, composition, or well-documented symbolism. Sharing just an era or a loose "mood" is NOT enough on its own. If nothing on this list actually connects, say so — do not force a pick just because the list requires one. A rejected batch leads to a fresh search, which is a normal, expected outcome, not a failure.
+
+${mediumGuidance}
 
 If you pick one, write a NEW rationale grounded in what this actual piece is (its real title, artist, subject, composition) — not a restatement of the abstract proposal.
 
