@@ -34,6 +34,28 @@
  * a generic newsroom explainer with none of the texture, metaphor, or
  * personality this product is supposed to have. Writing in this voice
  * turned out to be a creative-quality-dependent task after all.
+ *
+ * VOICE FIX (this revision): real published output over several days
+ * of live drops surfaced two concrete, recurring problems — not vague
+ * "needs more personality" drift, but two specific, traceable causes:
+ *
+ *   1. Nearly every "Why It Matters" landed via the same rhetorical
+ *      move ("it's not really about X — it's about Y"), in near-
+ *      identical three-sentence rhythm, story after story. Root
+ *      cause: the prompt specified a rigid three-part structure AND
+ *      the only example given demonstrated exactly that shape — the
+ *      model was faithfully reproducing the one pattern it was ever
+ *      shown, not drifting on its own. Fixed by adding a second,
+ *      differently-shaped example (shorter, blunter, no reframe) and
+ *      explicit instruction to vary rhythm rather than defaulting to
+ *      one structural formula.
+ *   2. "What's Next" repeatedly fell back to flat wire-service
+ *      boilerplate ("[X] has not responded to requests for comment")
+ *      whenever there was genuinely nothing forward-looking to
+ *      report. Root cause: no instruction existed for this case at
+ *      all, so the model defaulted to trained-in wire-copy phrasing.
+ *      Fixed with an explicit instruction against that specific
+ *      pattern.
  */
 import { extractJSON } from "./extract-json.js"
 
@@ -87,16 +109,24 @@ function loadDoc(filename: string): string {
 }
 
 const REGISTER_INSTRUCTIONS: Record<SelectedStory["register"], string> = {
-    full: `Write this in FULL VOICE per the guardrails: deadpan, culturally fluent, internet-native. The Humor Toolkit applies (one real joke max, placed only in Takeaway or the closing beat of What Happened, never announced — OR understatement anywhere). Why It Matters must do three jobs: state impact, note discourse shape neutrally, land a pattern-level insight that passes the swap test.
+    full: `Write this in FULL VOICE per the guardrails: deadpan, culturally fluent, internet-native. The Humor Toolkit applies (one real joke max, placed only in Takeaway or the closing beat of What Happened, never announced — OR understatement anywhere). Why It Matters must land real insight — impact, how the story is actually landing, and something worth noticing about the pattern — but NOT through the same rhetorical move every time.
 
-CRITICAL — abstract rules alone are not enough. Vivid, specific, metaphorical language is fully permitted per the "vibe ≠ fabrication" rule (fabricating facts/quotes/events is never permitted; interpreting how a real, verified thing FELT is). Here is what that actually sounds like in practice — study the density and confidence of the language, not just the content:
+AVOID DEFAULTING TO ONE STRUCTURAL FORMULA. A specific failure pattern to watch for: reaching for "it's not really about X — it's about Y" as the closing move on almost every story. That construction is a fine tool to reach for occasionally, not the required shape of Why It Matters. If you notice yourself building toward that exact reframe, try landing the insight a different way instead — sometimes the blunt fact stated once is stronger than a reframe. Vary sentence rhythm too: not every Why It Matters needs to be exactly three full, similarly-sized sentences. A fragment. A short blunt line after a longer one. Real voice is uneven, not metronomic.
 
-EXAMPLE (a real story, full voice):
+REGISTER SHOULD DIP CASUAL, NOT SIT AT ONE ALTITUDE. Full voice is not "smart newsletter" register held constant the whole time — let contractions in, drop the subject of a sentence the way a text message would, use fragments where they land harder than a complete sentence. Someone relaying this to a friend doesn't maintain one consistent formal register for three sentences straight.
+
+CRITICAL — abstract rules alone are not enough. Vivid, specific, metaphorical language is fully permitted per the "vibe ≠ fabrication" rule (fabricating facts/quotes/events is never permitted; interpreting how a real, verified thing FELT is). Here is what that actually sounds like in practice — study the density, confidence, AND VARIETY of the language, not just the content:
+
+EXAMPLE ONE (the reframe device — fine to use occasionally, NOT the default move):
 What Happened: "Two hours of lightning delay. Then LSU ran 23 plays for 140 yards in the first quarter alone and never let Clemson back into the building. 31-3 by halftime."
 Why It Matters: "This is the kind of opener that becomes its own storyline before the final whistle — the score, the halftime one-liner, Swinney's face on the sideline, all doing laps online before midnight. Neither reaction is really about Week 1. It's about how fast a feed needs a new storyline, and how little it actually takes to hand it one."
 Takeaway: "Clemson came to open a season and left as a cautionary tale before September was even a week old."
 
-Notice: short, confident sentences. A real metaphor ("left as a cautionary tale") describing how a verified result felt — not inventing anything that didn't happen. Meta-awareness about how the internet actually processes news, not a generic "reactions have been mixed" line. This is the bar — a competent, accurate, personality-free explainer paragraph is NOT what full voice is supposed to sound like, even if it's factually perfect.`,
+EXAMPLE TWO (blunt and uneven, no reframe — equally correct full voice, not a lesser version of Example One):
+What Happened: "The Late Show won Outstanding Variety Series at the Emmys — and Colbert didn't spend the speech on himself. Told the room his old writers and staff are looking for work, plug and everything. Also thanked his wife Evelyn, called her laugh 'the laugh I want for the rest of my life.'"
+Why It Matters: "A cancelled show just won the category it got cancelled out of. Colbert spent the win recruiting for his old staff instead of taking a lap. The applause is for the show. The rent is due for the staff."
+
+Notice EXAMPLE TWO never reaches for "it's not really about X." It states things plainly, drops the subject on a sentence ("Told the room..."), and lets a short blunt line do the closing work instead of a reframed thesis. Both examples are correct full voice — vary between shapes like these rather than defaulting to Example One's structure every time.`,
     tribute: `Write this in TRIBUTE REGISTER per the guardrails: warmth, not neutrality, is the goal. No jokes, no understatement-as-humor — the Humor Toolkit does not apply here. Why It Matters is explicitly permitted to be more crafted and resonant than the plain register allows — lean toward giving the reader something genuinely moving to carry with them, closer to a eulogy than a news brief. The swap test does not apply the same way — this can be specific to the actual person's life and legacy. CRITICAL: this warmth permission is about HOW real facts are delivered, never permission to invent an emotionally satisfying detail that isn't actually in the source — a moving detail is only usable if the source states it.
 
 EXAMPLE (a real story, tribute register):
@@ -144,6 +174,8 @@ STEP 2 — WRITE THE STORY, using whichever register is actually correct per Ste
 ${REGISTER_INSTRUCTIONS.full}
 [TRIBUTE register instructions, if applicable: ${REGISTER_INSTRUCTIONS.tribute}]
 [PLAIN register instructions, if applicable: ${REGISTER_INSTRUCTIONS.plain}]
+
+WHAT'S NEXT — AVOID WIRE-SERVICE BOILERPLATE: When there's genuinely no forward-looking development to report, do NOT default to stock wire-service phrases like "[X] has not responded to requests for comment" or "no further details were specified in the report." These read as flat AP-style filler, not this voice, and they've shown up as a repeated pattern across otherwise well-written stories. Instead: look for the one real forward-looking thread the source actually offers, even a small one (a hearing date, a promised follow-up, an open question someone raised) — and if there truly is nothing, say so plainly and specifically in the piece's own voice rather than in press-release language. "Nobody's said what's next" beats "has not responded to requests for comment" every time.
 
 CRITICAL RULE: only use facts, numbers, quotes, and details that actually appear in the source article text below. Never invent a quote, a reaction, a statistic, or an event that isn't in this text. This includes superlatives and exclusivity claims like "first," "last," "final," "only," "never" — these are checkable factual claims, not color.
 
