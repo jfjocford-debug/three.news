@@ -19,25 +19,31 @@
  * (subject, composition, or well-documented symbolism) — not just "same
  * rough era or mood." If nothing in a shortlist actually qualifies, the
  * model can reject the whole batch instead of being forced to force-fit
- * the least-bad option; findArtwork then retries once with a fresh set
- * of search queries before giving up. This replaced an earlier version
- * that always required a pick even from a weak shortlist, which is how
- * mismatches like a 19th-century engraving illustrating a same-day mail
- * ballot story got through — the model had no way to say "none of these
- * actually connect," so it always found *something* to justify.
+ * the least-bad option.
  *
- * MEDIUM PREFERENCE (this revision): real published output showed a
- * strong bias toward non-painting objects — medals, porcelain services,
- * bronze statuettes, architectural prints, photographs — because nothing
- * in the pipeline ever mentioned medium at all. The Met's `medium` field
- * was fetched and shown to the selecting model, but with no instruction
- * to weigh it, keyword search just returned whatever the Met had across
- * every object type, and selection picked on subject-match alone. Both
- * the query generation and final selection steps now explicitly prefer
- * paintings — with one deliberate exception: actual Greek panel painting
- * barely survives anywhere, so for the Classical Greek era specifically,
- * vase painting counts as the real painting-equivalent rather than being
- * penalized as "not a painting."
+ * GUARANTEED FALLBACK (this revision): the rejection path above, once
+ * combined with the medium preference below, turned out to be too
+ * strict for real operation — a real run failed 6 out of 6 stories in a
+ * row, each with well-reasoned but ultimately uncompromising rejections
+ * (a concept calling for "a winged-machine emblem" or "an empty
+ * general's chair with a helmet on it" genuinely may not exist anywhere
+ * in the Met's public-domain, imaged collection). A 0%-publish day is a
+ * worse outcome than an imperfect artwork match, so after
+ * MAX_SELECTION_ATTEMPTS strict attempts are exhausted, ONE final
+ * relaxed attempt runs against the best candidates gathered so far,
+ * explicitly allowed to match on era/mood/genre alone rather than exact
+ * subject or composition. Only this last-resort attempt is graded on
+ * the relaxed standard — every earlier attempt still holds out for a
+ * genuine connection first.
+ *
+ * MEDIUM PREFERENCE: real published output showed a strong bias toward
+ * non-painting objects — medals, porcelain services, bronze statuettes,
+ * architectural prints, photographs — because nothing in the pipeline
+ * ever mentioned medium at all. Both query generation and selection now
+ * explicitly prefer paintings, with one deliberate exception: actual
+ * Greek panel painting barely survives anywhere, so for the Classical
+ * Greek era specifically, vase painting counts as the real painting-
+ * equivalent rather than being penalized as "not a painting."
  *
  * Uses /v1.1 of the Met's API — /v1/search is deprecated and retires
  * October 1, 2026.
@@ -102,9 +108,6 @@ async function generateSearchQueries(
             ? `\n\nThese queries were already tried and did not produce anything with a genuine connection to the concept — try meaningfully different angles this time, not close variants:\n${avoidQueries.map((q) => `- "${q}"`).join("\n")}`
             : ""
 
-    // Nudges query phrasing toward the medium we actually want back,
-    // since the Met's keyword search has no separate medium filter —
-    // the words in the query itself are the only lever available here.
     const mediumNote =
         proposal.era === "Classical Greek"
             ? `\n\nMEDIUM: prefer terms associated with Greek vase painting (e.g. "red-figure vase," "black-figure amphora," "painted krater") over sculpture or pottery-shape terms alone — actual Greek panel painting barely survives, so vase painting is the real painting-equivalent for this era, not a fallback.`
@@ -229,14 +232,16 @@ type SelectionResult =
 
 /**
  * Given a real shortlist, asks Claude to pick the single best match — or
- * reject the whole shortlist if nothing genuinely connects. Rejection is
- * a real, expected outcome here, not an error: keyword search can return
- * pieces that share an era or mood without meaning anything relevant to
- * the actual story.
+ * reject the whole shortlist if nothing genuinely connects. `relaxed`
+ * is only ever true on the final, last-resort attempt in findArtwork,
+ * once every strict attempt has already been exhausted — it lowers the
+ * bar to era/mood/genre alone specifically so a story never fails to
+ * publish outright over an imperfect artwork match.
  */
 async function selectBestMatch(
     proposal: ArtworkProposal,
-    candidates: MetObjectDetail[]
+    candidates: MetObjectDetail[],
+    relaxed: boolean = false
 ): Promise<SelectionResult> {
     const candidateList = candidates
         .map(
@@ -250,6 +255,10 @@ async function selectBestMatch(
             ? `MEDIUM PREFERENCE: for this era, treat Greek vase painting (red-figure, black-figure, painted pottery) as the real "painting" category — actual panel painting from this period doesn't survive in any collection, so vase painting is not a fallback, it's the correct choice. Prefer it over sculpture, coins, or unpainted pottery shapes when the subject match is comparable.`
             : `MEDIUM PREFERENCE: prefer an actual painting (oil, tempera, fresco, panel, or a drawing/print if no painting connects as well) over sculpture, medals, ceramics, metalwork, or other decorative/utilitarian objects. Only choose a non-painting candidate if it connects to the concept meaningfully better than every painting option on the list — a mediocre painting match does not automatically beat a strong sculpture match, but a comparable one should win on medium.`
 
+    const standardInstruction = relaxed
+        ? `This is a LAST-RESORT pass — every stricter attempt has already been exhausted and rejected everything. The bar is now: does this piece share the same era, general mood, or genre as the concept (e.g. a Neoclassical piece for a formal/civic concept, a Classical Greek piece for a mythic/heroic one)? A loose, honest, era-appropriate match is REQUIRED to be picked now — do not reject this batch. Pick whichever candidate is the least-forced fit and say so plainly in the rationale (it's fine for the rationale to acknowledge this is an atmospheric rather than literal match). Only return matched:false if the list is completely empty of anything even loosely appropriate to the era.`
+        : `Pick the single best match — but ONLY if it has a genuine, defensible connection to the concept: a real match in subject, composition, or well-documented symbolism. Sharing just an era or a loose "mood" is NOT enough on its own. If nothing on this list actually connects, say so — do not force a pick just because the list requires one. A rejected batch leads to a fresh search, which is a normal, expected outcome, not a failure.`
+
     const prompt = `You proposed this artwork concept for a story:
 
 Era: ${proposal.era}
@@ -261,7 +270,7 @@ Here are REAL candidate pieces from the Met's collection, all confirmed public d
 ${candidateList}
 ---
 
-Pick the single best match — but ONLY if it has a genuine, defensible connection to the concept: a real match in subject, composition, or well-documented symbolism. Sharing just an era or a loose "mood" is NOT enough on its own. If nothing on this list actually connects, say so — do not force a pick just because the list requires one. A rejected batch leads to a fresh search, which is a normal, expected outcome, not a failure.
+${standardInstruction}
 
 ${mediumGuidance}
 
@@ -325,6 +334,7 @@ or:
 
 export async function findArtwork(proposal: ArtworkProposal): Promise<SelectedArtwork> {
     const triedQueries: string[] = []
+    let lastCandidates: MetObjectDetail[] = []
 
     for (let attempt = 1; attempt <= MAX_SELECTION_ATTEMPTS; attempt++) {
         const queries = await generateSearchQueries(proposal, triedQueries)
@@ -333,21 +343,38 @@ export async function findArtwork(proposal: ArtworkProposal): Promise<SelectedAr
         const candidates = await findCandidates(queries)
 
         if (candidates.length === 0) {
-            console.log(`   Attempt ${attempt}: no candidates found at all, ${attempt < MAX_SELECTION_ATTEMPTS ? "retrying with fresh queries..." : "out of attempts."}`)
+            console.log(`   Attempt ${attempt}: no candidates found at all, ${attempt < MAX_SELECTION_ATTEMPTS ? "retrying with fresh queries..." : "moving to last-resort pass."}`)
             continue
         }
 
+        lastCandidates = candidates
         const result = await selectBestMatch(proposal, candidates)
 
         if (result.matched) {
             return result.artwork
         }
 
-        console.log(`   Attempt ${attempt}: shortlist rejected — ${result.reason}${attempt < MAX_SELECTION_ATTEMPTS ? " Retrying with fresh queries..." : " Out of attempts."}`)
+        console.log(`   Attempt ${attempt}: shortlist rejected — ${result.reason}${attempt < MAX_SELECTION_ATTEMPTS ? " Retrying with fresh queries..." : " Moving to last-resort pass."}`)
+    }
+
+    // GUARANTEED FALLBACK: every strict attempt is exhausted. Rather than
+    // fail the story outright — the actual problem this fixes, since a
+    // real run failed 6/6 stories this way — make one final relaxed pass
+    // against whatever the last real shortlist was, explicitly allowed
+    // to match on era/mood alone. If even that comes back completely
+    // empty (no candidates were ever found across every attempt), only
+    // then does this genuinely fail.
+    if (lastCandidates.length > 0) {
+        console.log(`   Last-resort pass: relaxing to era/mood match against the most recent shortlist...`)
+        const relaxedResult = await selectBestMatch(proposal, lastCandidates, true)
+        if (relaxedResult.matched) {
+            return relaxedResult.artwork
+        }
+        console.log(`   Last-resort pass also came back empty: ${relaxedResult.reason}`)
     }
 
     throw new Error(
-        `No genuinely-connected, public-domain candidate found for era "${proposal.era}" after ${MAX_SELECTION_ATTEMPTS} attempts. ` +
+        `No candidate found for era "${proposal.era}" even after a relaxed last-resort pass. ` +
             `Queries tried: ${triedQueries.join(", ")}.`
     )
 }
