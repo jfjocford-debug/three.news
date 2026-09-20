@@ -188,6 +188,18 @@ Write all six fields per the content structure table in the guardrails doc (Head
 
 Also propose artwork: pick an era (Renaissance, Classical Greek, Neoclassicism, or Baroque — Baroque only if the metaphor is unusually strong), a brief concept description, and a one-sentence internal rationale.
 
+CONCEPT SPECIFICITY — this is where most artwork searches fail, so read this carefully: museums catalog real paintings that already exist, not custom commissions built to match a metaphor. Describe the concept as a genre or archetype that painters actually painted repeatedly and that plausibly exists in a major collection — not a bespoke compound of several specific requirements stacked together. If your concept needs 3+ specific conditions to ALL be true of one real painting at once (a specific object, PLUS a specific emotional absence, PLUS a specific atmospheric mood, PLUS a specific moment-in-time), it's too narrow. Simplify to the single strongest visual idea and let the one-sentence rationale carry the rest of the metaphorical connection — the painting doesn't need to embody the whole metaphor by itself.
+
+BAD (too specific — three stacked conditions, real failure from testing): "A marble senate-style hall, an ordered intact institutional interior, featuring an empty pedestal awaiting an uncarved plaque."
+GOOD (same underlying idea, one strong findable motif): "An empty pedestal or vacant niche awaiting a statue." The rationale can carry the rest: "The absence of the honoree, not the honor itself — a role announced before anyone actually fills it."
+
+BAD (too specific — mood, moment, and absence all required at once, real failure from testing): "A stark, formally restrained shipwreck at the moment of impact, with no human detail."
+GOOD (a genre that actually exists across most collections): "A ship overwhelmed by a storm at sea." Let the rationale do the interpretive work, not the painting's exact composition.
+
+When in doubt, favor concepts using the words a museum wall label would actually use — "a portrait," "a shipwreck," "a departure scene," "an animal study," "a ceremonial procession," "a ruin" — over an original, specific composition invented to match this story precisely.
+
+Do all your reconsidering silently, before you start writing the JSON. Output EXACTLY ONE JSON object and nothing else — no commentary before it, no "wait, let me reconsider" or second attempt after it. If you notice a mistake in a field's value, fix that value in place before outputting it — never output a first version and then a corrected one.
+
 If sourceContentUsable is true, respond with ONLY a JSON object matching this shape, no other text:
 {
   "sourceContentUsable": true,
@@ -292,6 +304,8 @@ Check every specific, checkable claim in the draft against the source: numbers, 
 Known failure pattern to watch for specifically: a draft calling something someone's "final" or "last" X when the source only says it's their most recent, or their "first" of a planned series — these are opposite claims and get confused easily. Also watch for invented interiority — claims about what someone "didn't know," "would have wanted," or "never got to" that aren't actually stated in the source.
 
 If you find any unsupported or contradicted claim, rewrite the specific field(s) needed to fix it — keep everything else in the draft unchanged. Explain what you changed and why in "factCheckNotes." If the draft is fully accurate as written, return it unchanged and set "factCheckNotes" to null — do not invent a correction that isn't needed, but do not rubber-stamp something wrong either.
+
+Do all your reconsidering silently, before you start writing the JSON. Output EXACTLY ONE JSON object and nothing else — no commentary before it, no "wait, let me reconsider" or second attempt after it, and no text of any kind outside the object itself. If you notice a mistake in a field's value, fix that value in place before outputting it — never output a first version and then a corrected one.
 
 Respond with ONLY a JSON object, no other text:
 {
