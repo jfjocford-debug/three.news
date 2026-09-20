@@ -23,6 +23,20 @@
  * a slightly older third item rather than a broken or incomplete
  * drop. Worth knowing that's the deliberate tradeoff.
  *
+ * STALENESS DATE (this revision): DropStack.tsx now carries a
+ * `syncedDate` per drop, used to show a "not updated" state if a drop's
+ * time has passed but this sync never actually ran for it that day (a
+ * missed cron firing, a failed pipeline run — both have happened for
+ * real). This date is computed in America/Chicago wall-clock time
+ * specifically, NOT the pipeline server's own local time — GitHub
+ * Actions runners run in UTC, and the frontend's staleness check runs
+ * in the visitor's browser using Chicago-cycle logic. Using the
+ * server's raw local time here would make every drop appear falsely
+ * stale for most of the day, since UTC and Chicago dates disagree
+ * except for a few overlapping hours. DropTransition.tsx has no
+ * staleness UI and doesn't carry this field, so it's patched only into
+ * DropStack.tsx, not looped across both target files like headlines are.
+ *
  * Like everything else that writes content, this only updates the
  * PROJECT's code files — it does not go live until publishLiveSite()
  * is deliberately called, same deferred-until-published model as
@@ -36,9 +50,32 @@ import type { DropKey } from "./source.js"
 const BLOG_COLLECTION_ID = "fKsETXCvz"
 
 // Both files carry an identical `drops` array literal and get patched
-// the same way. Add a filename here if a future component also needs
-// this same headline data.
+// the same way for headlines. Add a filename here if a future component
+// also needs this same headline data.
 const TARGET_CODE_FILES = ["DropStack.tsx", "DropTransition.tsx"] as const
+
+// Only DropStack.tsx has a syncedDate field to patch — see the
+// STALENESS DATE note above for why this isn't just added to
+// TARGET_CODE_FILES generically.
+const STALENESS_TARGET_FILE = "DropStack.tsx"
+
+const CYCLE_START_HOUR = 7
+
+// Same cycle-date logic as DropStack.tsx's own cycleDateKey (hour < 7
+// belongs to the previous day's cycle), but computed here against
+// America/Chicago wall-clock time specifically rather than the
+// pipeline server's local time. See the module comment above for why
+// that distinction matters.
+function currentCycleDateKey(): string {
+    const chicagoNow = new Date(
+        new Date().toLocaleString("en-US", { timeZone: "America/Chicago" })
+    )
+    const d = new Date(chicagoNow)
+    if (chicagoNow.getHours() < CYCLE_START_HOUR) {
+        d.setDate(d.getDate() - 1)
+    }
+    return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate()
+}
 
 // Reading a Blog item's Categories field back via framer-api returns the
 // referenced Category item's SLUG, not its ID — confirmed by testing
@@ -143,6 +180,25 @@ function replaceHeadlinesInSource(
     return sourceCode.replace(pattern, `$1\n${formattedHeadlines}\n        $3`)
 }
 
+/**
+ * Replaces just the syncedDate value for one drop key within the
+ * source text. Only meaningful for DropStack.tsx, which is the only
+ * file with a staleness UI to drive.
+ */
+function replaceSyncedDateInSource(sourceCode: string, dropKey: DropKey, dateKey: string): string {
+    const pattern = new RegExp(`(key:\\s*"${dropKey}"[\\s\\S]*?syncedDate:\\s*")[^"]*(")`)
+
+    if (!pattern.test(sourceCode)) {
+        throw new Error(
+            `Could not find syncedDate for drop "${dropKey}" in the current source. ` +
+                `If DropStack.tsx's Drop type no longer has this field, this function is stale ` +
+                `and should be removed along with the staleness feature itself.`
+        )
+    }
+
+    return sourceCode.replace(pattern, `$1${dateKey}$2`)
+}
+
 export async function syncHomepage(): Promise<void> {
     const framer = await connectToFramer()
 
@@ -163,6 +219,8 @@ export async function syncHomepage(): Promise<void> {
             }
         }
 
+        const todayKey = currentCycleDateKey()
+
         for (const fileName of TARGET_CODE_FILES) {
             const codeFile = await framer.getCodeFile(fileName)
             if (!codeFile) {
@@ -174,7 +232,18 @@ export async function syncHomepage(): Promise<void> {
             for (const drop of drops) {
                 const headlines = headlinesByDrop.get(drop) ?? []
                 if (headlines.length === 0) continue
+
                 currentSource = replaceHeadlinesInSource(currentSource, drop, headlines)
+
+                // Only stamp today's date on drops that actually got
+                // fresh headlines just now, and only in the one file
+                // that has a staleness UI to drive. A drop with no
+                // published items this run keeps its OLD syncedDate on
+                // purpose — that's exactly what should make it show as
+                // "not updated" once its hour passes.
+                if (fileName === STALENESS_TARGET_FILE) {
+                    currentSource = replaceSyncedDateInSource(currentSource, drop, todayKey)
+                }
             }
 
             await codeFile.setFileContent(currentSource)
